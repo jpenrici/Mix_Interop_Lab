@@ -1,83 +1,149 @@
-#!/usr/bin/perl
+#!/usr/bin/env perl
 # demo/setup.pl
 
 use strict;
 use warnings;
 
-main();
+use File::Glob qw(bsd_glob);
+use File::Path qw(make_path remove_tree);
+use File::Spec;
+use FindBin qw($RealBin);
+
+my $ROOT         = $RealBin;
+my $VENV_DIR     = File::Spec->catdir( $ROOT, '.venv' );
+my $VENV_PYTHON  = File::Spec->catfile( $VENV_DIR, 'bin', 'python' );
+my $BUILD_DIR    = File::Spec->catdir( $ROOT, 'build' );
+my $LIB_DIR      = File::Spec->catdir( $ROOT, 'public', 'lib' );
+my $REQUIREMENTS = File::Spec->catfile( $ROOT, 'requirements.txt' );
+my $ENTRY_POINT  = File::Spec->catfile( $ROOT, 'main.py' );
+
+my %COMMANDS = (
+    check => \&check,
+    build => \&build,
+    run   => \&run,
+    clean => \&clean,
+    all   => sub { check(); build(); run(); },
+    help  => \&usage,
+);
 
 sub main {
-    my $action = $ARGV[0] || 'help';
+    my ($action) = @ARGV;
+    $action //= 'help';
 
-    if ( $action eq 'check' ) {
-        check_venv();
-    }
-    elsif ( $action eq 'build' ) {
-        build();
-    }
-    elsif ( $action eq 'run' ) {
-        run();
-    }
-    elsif ( $action eq 'all' ) {
-        check();
-        build();
-        run();
-    }
-    elsif ( $action eq 'clean' ) {
-        clean();
-    }
-    else {
-        print "Usage: perl setup.pl [all|check|build|run|clean]\n";
+    my $command = $COMMANDS{$action};
+    if ( !$command ) {
+        usage();
+        return 1;
     }
 
+    chdir $ROOT or die "Cannot chdir to $ROOT: $!\n";
+    $command->();
+    return 0;
+}
+
+sub usage {
+    print "Usage: perl setup.pl [all|check|build|run|clean]\n";
+    return;
 }
 
 sub check {
+    print "[*] Checking required tools...\n";
+    for my $tool (qw(python3 php cmake)) {
+        die "[-] '$tool' was not found in PATH.\n" unless command_exists($tool);
+    }
+
+    my $ffi =
+      capture( 'php', '-r', 'echo extension_loaded("ffi") ? "yes" : "no";' );
+    die "[-] PHP FFI extension is not enabled (install php-ffi).\n"
+      unless defined $ffi && $ffi eq 'yes';
+    print "[+] Tools OK.\n";
+
     check_venv();
-}
-
-sub build {
-    print "[*] Building C++ Core with CMake...\n";
-    system("mkdir -p public/lib");
-    system("cmake -B build");
-    system("cmake --build build");
-    print "[+] Build completed.\n";
-}
-
-sub run {
-    print "[*] Starting Python/PySide6 Entry Point...\n";
-    system("python3 main.py");
-}
-
-sub clean {
-    print "[*] Cleaning temporary build files...\n";
-    system("rm -rf ./build public/lib/*.so public/lib/*.dll");
-    print "[+] Clean finished.\n";
+    return;
 }
 
 sub check_venv {
-    my $venv_dir   = ".venv";
-    my $python_bin = "/bin/python3";    # Linux
+    print "[*] Checking virtual environment ($VENV_DIR)...\n";
 
-    print "[*] Checking virtual environment ($venv_dir)...\n";
-
-    if ( -d $venv_dir ) {
-        print "[+] Virtual environment directory exists.\n";
-
-        print "[*] Checking if PySide6 is installed...\n";
-        my $output = qx{$python_bin -c "import PySide6; print(1)" 2>/dev/null};
-
-        if ( $? == 0 && $output =~ /1/ ) {
-            print "[+] PySide6 is installed in the venv.\n";
-        }
-        else {
-            print "[-] PySide6 is NOT installed in the venv.\n";
-            system("$venv_dir/bin/python -m pip install PySide6");
-        }
+    if ( !-x $VENV_PYTHON ) {
+        print "[-] Virtual environment not found. Creating it...\n";
+        run_or_die( 'python3', '-m', 'venv', $VENV_DIR );
     }
-    else {
-        print "[-] Virtual environment ($venv_dir) not found.\n";
-        system("$python_bin -m venv .venv");
-        check_venv();
+
+    if ( defined capture( $VENV_PYTHON, '-c', 'import PySide6' ) ) {
+        print "[+] PySide6 is installed in the venv.\n";
+        return;
     }
+
+    print "[-] PySide6 is NOT installed in the venv. Installing...\n";
+    run_or_die( $VENV_PYTHON, '-m', 'pip', 'install', '-r', $REQUIREMENTS );
+    return;
 }
+
+sub build {
+    print "[*] Building C++ core with CMake...\n";
+    make_path($LIB_DIR);
+    run_or_die( 'cmake', '-S', $ROOT, '-B', $BUILD_DIR,
+        '-DCMAKE_BUILD_TYPE=Release' );
+    run_or_die( 'cmake', '--build', $BUILD_DIR, '--parallel' );
+    print "[+] Build completed.\n";
+    return;
+}
+
+sub run {
+    die "[-] Python virtual environment missing. Run: perl setup.pl check\n"
+      unless -x $VENV_PYTHON;
+    print "[*] Starting Python/PySide6 entry point...\n";
+    run_or_die( $VENV_PYTHON, $ENTRY_POINT );
+    return;
+}
+
+sub clean {
+    print "[*] Cleaning build artifacts...\n";
+    remove_tree($BUILD_DIR);
+    unlink bsd_glob( File::Spec->catfile( $LIB_DIR, 'math_engine.*' ) );
+    print "[+] Clean finished.\n";
+    return;
+}
+
+# --- helpers ---------------------------------------------------------------
+
+# Runs a command (list form: no shell, no quoting issues) and dies on failure.
+sub run_or_die {
+    my @cmd = @_;
+    system(@cmd) == 0
+      or die sprintf(
+        "[-] Command failed (%s): %s\n",
+        $? == -1 ? $! : $? >> 8,
+        join( ' ', @cmd )
+      );
+    return;
+}
+
+# Returns the command's stdout on success, undef on failure. stderr is discarded.
+sub capture {
+    my @cmd = @_;
+    open my $stderr_backup, '>&', \*STDERR            or return;
+    open STDERR,            '>',  File::Spec->devnull or return;
+
+    my $output;
+    if ( open my $fh, '-|', @cmd ) {
+        local $/;
+        $output = <$fh>;
+        close $fh or undef $output;
+    }
+
+    open STDERR, '>&', $stderr_backup;
+    return $output;
+}
+
+sub command_exists {
+    my ($cmd) = @_;
+    for my $dir ( File::Spec->path ) {
+        my $path = File::Spec->catfile( $dir, $cmd );
+        return 1 if -f $path && -x _;
+    }
+    return 0;
+}
+
+exit main() unless caller;

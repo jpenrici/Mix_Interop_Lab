@@ -1,71 +1,70 @@
-<!-- demo/public/ui/index.html -->
-
 <!DOCTYPE html>
+<!-- demo/public/ui/index.html -->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Project</title>
+    <meta name="color-scheme" content="dark">
+    <title>Matrix multiplication</title>
     <link rel="stylesheet" href="style.css">
+    <script type="module" src="app.js"></script>
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>Project</h1>
-            <p class="subtitle">Python, PHP & C Low-Latency Environment</p>
+            <h1>Matrix multiplication</h1>
+            <p class="subtitle">Python, PHP &amp; C++ low-latency environment</p>
         </header>
 
         <main>
-            <section class="card">
-                <h2>Matrix Computation</h2>
-                <p>Click the button below to load <code>matrix.csv</code> and process matrix multiplication via C FFI engine.</p>
-                <button id="compute-btn" onclick="runComputation()">Compute Matrix</button>
-            </section>
+            <form id="matrix-form" novalidate>
+                <div class="matrix-grid">
+                    <fieldset class="card matrix-input" data-matrix="a">
+                        <legend>Matrix A</legend>
+                        <label class="sr-only" for="matrix-a">Values of matrix A</label>
+                        <textarea id="matrix-a" spellcheck="false" rows="8"
+                                  placeholder="One row per line, values separated by commas or spaces&#10;1 2 3&#10;4 5 6"></textarea>
+                        <div class="matrix-meta">
+                            <label class="file-label">
+                                Load CSV
+                                <input type="file" accept=".csv,.tsv,.txt,text/csv,text/plain">
+                            </label>
+                            <span class="dims" aria-live="polite"></span>
+                        </div>
+                        <p class="field-error" role="alert" hidden></p>
+                    </fieldset>
 
-            <section class="card results-card">
-                <h2>Result</h2>
-                <div id="loading" class="hidden">Processing...</div>
-                <div id="output-container">
+                    <fieldset class="card matrix-input" data-matrix="b">
+                        <legend>Matrix B</legend>
+                        <label class="sr-only" for="matrix-b">Values of matrix B</label>
+                        <textarea id="matrix-b" spellcheck="false" rows="8"
+                                  placeholder="Rows of B must equal columns of A&#10;7 8&#10;9 10&#10;11 12"></textarea>
+                        <div class="matrix-meta">
+                            <label class="file-label">
+                                Load CSV
+                                <input type="file" accept=".csv,.tsv,.txt,text/csv,text/plain">
+                            </label>
+                            <span class="dims" aria-live="polite"></span>
+                        </div>
+                        <p class="field-error" role="alert" hidden></p>
+                    </fieldset>
+                </div>
+
+                <div class="actions">
+                    <button type="submit" id="compute-btn" disabled>Multiply A × B</button>
+                    <button type="reset" id="reset-btn" class="secondary">Clear</button>
+                    <p id="compat" class="compat" aria-live="polite">Enter both matrices.</p>
+                </div>
+            </form>
+
+            <section class="card results-card" aria-labelledby="result-title">
+                <h2 id="result-title">Result</h2>
+                <p id="status" class="status" role="status" hidden></p>
+                <div id="output">
                     <p class="placeholder">No computation executed yet.</p>
                 </div>
             </section>
         </main>
     </div>
-
-    <script>
-        async function runComputation() {
-            const outputContainer = document.getElementById('output-container');
-            const loading = document.getElementById('loading');
-
-            loading.classList.remove('hidden');
-            outputContainer.innerHTML = '';
-
-            try {
-                const response = await fetch('../index.php?action=compute');
-                const data = await response.json();
-
-                loading.classList.add('hidden');
-
-                if (data.status === 'success') {
-                    let html = '<table class="matrix-table">';
-                    data.result.forEach(row => {
-                        html += '<tr>';
-                        row.forEach(val => {
-                            html += `<td>${Number(val).toFixed(2)}</td>`;
-                        });
-                        html += '</tr>';
-                    });
-                    html += '</table>';
-                    outputContainer.innerHTML = html;
-                } else {
-                    outputContainer.innerHTML = `<p class="error">Error: ${data.error || 'Unknown error'}</p>`;
-                }
-            } catch (error) {
-                loading.classList.add('hidden');
-                outputContainer.innerHTML = `<p class="error">Failed to connect to PHP backend.</p>`;
-                console.error(error);
-            }
-        }
-    </script>
 </body>
 </html>

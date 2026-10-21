@@ -1,60 +1,75 @@
-<!-- demo/public/index.php -->
-
 <?php
-header('Content-Type: application/json');
 
-$libPath = __DIR__ . '/lib/math_engine.so'; // Linux
-$ffi = FFI::cdef("
-void multiply_matrices_c(const double* a, const double* b, double* result, size_t n);
-", $libPath);
+declare(strict_types=1);
 
-$action = $_GET['action'] ?? '';
+use Demo\MatrixEngine;
 
-if ($action === 'compute') {
-    $csvFile = __DIR__ . '/../data/matrix.csv';
+require __DIR__ . '/../src/MatrixEngine.php';
 
-    if (!file_exists($csvFile)) {
-        echo json_encode(['error' => 'Matrix CSV file not found.']);
-        exit;
-    }
-
-    // Load CSV
-    $rows = [];
-    if (($handle = fopen($csvFile, 'r')) !== false) {
-        while (($data = fgetcsv($handle, 1000, ',')) !== false) {
-            $rows[] = array_map('floatval', $data);
-        }
-        fclose($handle);
-    }
-
-    $n = count($rows);
-
-    // FFI
-    $matrixA = $ffi->new("double[" . ($n * $n) . "]");
-    $matrixB = $ffi->new("double[" . ($n * $n) . "]");
-    $result  = $ffi->new("double[" . ($n * $n) . "]");
-
-    for ($i = 0; $i < $n; $i++) {
-        for ($j = 0; $j < $n; $j++) {
-            $matrixA[$i * $n + $j] = $rows[$i][$j];
-            $matrixB[$i * $n + $j] = $rows[$i][$j];
-        }
-    }
-
-    $ffi->multiply_matrices_c($matrixA, $matrixB, $result, $n);
-
-    // Array PHP
-    $output = [];
-    for ($i = 0; $i < $n; $i++) {
-        $row = [];
-        for ($j = 0; $j < $n; $j++) {
-            $row[] = $result[$i * $n + $j];
-        }
-        $output[] = $row;
-    }
-
-    echo json_encode(['status' => 'success', 'result' => $output]);
+/** @param array<string, mixed> $payload */
+function respond(int $status, array $payload): never
+{
+    http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+    header('X-Content-Type-Options: nosniff');
+    echo json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
     exit;
 }
 
-echo json_encode(['message' => 'Mix PHP Server running. Use ?action=compute']);
+function fail(int $status, string $message): never
+{
+    respond($status, ['status' => 'error', 'error' => $message]);
+}
+
+$action = $_GET['action'] ?? '';
+
+if ($action === '') {
+    respond(200, ['message' => 'Mix PHP server running. POST two matrices to ?action=multiply.']);
+}
+
+if ($action !== 'multiply') {
+    fail(404, 'Unknown action.');
+}
+
+if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+    header('Allow: POST');
+    fail(405, 'Use POST.');
+}
+
+if (!str_starts_with($_SERVER['CONTENT_TYPE'] ?? '', 'application/json')) {
+    fail(415, 'Content-Type must be application/json.');
+}
+
+try {
+    $body = json_decode(
+        (string) file_get_contents('php://input'),
+        associative: true,
+        depth: 8,
+        flags: JSON_THROW_ON_ERROR
+    );
+} catch (JsonException) {
+    fail(400, 'Request body is not valid JSON.');
+}
+
+if (!is_array($body) || !array_key_exists('a', $body) || !array_key_exists('b', $body)) {
+    fail(400, 'Body must be an object with matrices "a" and "b".');
+}
+
+try {
+    $engine = new MatrixEngine(MatrixEngine::libraryPath(__DIR__ . '/lib'));
+    $result = $engine->multiply($body['a'], $body['b']);
+} catch (InvalidArgumentException $e) {
+    fail(400, $e->getMessage());
+} catch (DomainException $e) {
+    fail(422, $e->getMessage());
+} catch (Throwable $e) {
+    error_log((string) $e);
+    fail(500, 'The computation engine is unavailable.');
+}
+
+respond(200, [
+    'status'     => 'success',
+    'dimensions' => ['rows' => count($result), 'cols' => count($result[0])],
+    'result'     => $result,
+]);
